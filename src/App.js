@@ -13,7 +13,7 @@ class App extends Component {
     };
   }
   renderShippingRequests() {
-    return (<Board />);
+    return (<Board allBacklog={true} />);
   }
 
   renderNavigation() {

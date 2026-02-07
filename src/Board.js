@@ -8,17 +8,107 @@ export default class Board extends React.Component {
   constructor(props) {
     super(props);
     const clients = this.getClients();
-    this.state = {
-      clients: {
-        backlog: clients.filter(client => !client.status || client.status === 'backlog'),
-        inProgress: clients.filter(client => client.status && client.status === 'in-progress'),
-        complete: clients.filter(client => client.status && client.status === 'complete'),
+    // If allBacklog prop is set, put every card in backlog (and update status)
+    if (props && props.allBacklog) {
+      const backlogClients = clients.map(c => ({...c, status: 'backlog'}));
+      this.state = { clients: { backlog: backlogClients, inProgress: [], complete: [] } };
+    } else {
+      this.state = {
+        clients: {
+          backlog: clients.filter(client => !client.status || client.status === 'backlog'),
+          inProgress: clients.filter(client => client.status && client.status === 'in-progress'),
+          complete: clients.filter(client => client.status && client.status === 'complete'),
+        }
       }
     }
     this.swimlanes = {
       backlog: React.createRef(),
       inProgress: React.createRef(),
       complete: React.createRef(),
+    }
+    this.drake = null;
+  }
+  componentDidMount() {
+    const containers = [
+      this.swimlanes.backlog.current,
+      this.swimlanes.inProgress.current,
+      this.swimlanes.complete.current,
+    ].filter(Boolean);
+    if (containers.length) {
+      this.drake = Dragula(containers);
+      this.drake.on('drop', (el, target, source, sibling) => this.handleDrop(el, target, source, sibling));
+    }
+  }
+
+  componentWillUnmount() {
+    if (this.drake) {
+      this.drake.destroy();
+      this.drake = null;
+    }
+  }
+
+  containerKey(container) {
+    if (container === this.swimlanes.backlog.current) return 'backlog';
+    if (container === this.swimlanes.inProgress.current) return 'inProgress';
+    if (container === this.swimlanes.complete.current) return 'complete';
+    return null;
+  }
+
+  handleDrop(el, target, source, sibling) {
+    try {
+      if (!el) return;
+      const id = el.getAttribute && el.getAttribute('data-id');
+
+      // Normalize containers: sometimes dragula may pass inner nodes; find closest drag column
+      const normalize = node => {
+        if (!node) return null;
+        if (node.classList && node.classList.contains('Swimlane-dragColumn')) return node;
+        return node.closest && node.closest('.Swimlane-dragColumn');
+      };
+      const normSource = normalize(source) || normalize(el.parentNode);
+      const normTarget = normalize(target) || normalize(el.parentNode);
+
+      const sourceKey = this.containerKey(normSource);
+      const targetKey = this.containerKey(normTarget);
+      if (!id || !sourceKey || !targetKey) return;
+
+      // shallow copy arrays
+      const clients = {
+        backlog: [...this.state.clients.backlog],
+        inProgress: [...this.state.clients.inProgress],
+        complete: [...this.state.clients.complete],
+      };
+
+      // find and remove from source
+      const sourceArr = clients[sourceKey];
+      const idx = sourceArr.findIndex(c => String(c.id) === String(id));
+      if (idx === -1) return;
+      const [moved] = sourceArr.splice(idx, 1);
+
+      // update status for cross-swimlane moves
+      if (sourceKey !== targetKey) {
+        if (targetKey === 'backlog') moved.status = 'backlog';
+        if (targetKey === 'inProgress') moved.status = 'in-progress';
+        if (targetKey === 'complete') moved.status = 'complete';
+      }
+
+      // insert into target at position determined by sibling
+      const targetArr = clients[targetKey];
+      if (!sibling) {
+        targetArr.push(moved);
+      } else {
+        const siblingEl = sibling.nodeType === 1 ? sibling : (sibling.closest && sibling.closest('[data-id]'));
+        const siblingId = siblingEl && siblingEl.getAttribute && siblingEl.getAttribute('data-id');
+        const sibIndex = siblingId ? targetArr.findIndex(c => String(c.id) === String(siblingId)) : -1;
+        if (sibIndex === -1) targetArr.push(moved);
+        else targetArr.splice(sibIndex, 0, moved);
+      }
+
+      this.setState({ clients });
+    } catch (err) {
+      // Don't allow drag errors to crash the app; log for debugging
+      // eslint-disable-next-line no-console
+      console.error('Drag handling error', err);
     }
   }
   getClients() {
